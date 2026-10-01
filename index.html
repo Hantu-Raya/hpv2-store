@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>hpv2-store</title>
+<script>
+// HP Colors v2 storage probe. Deadlock's hidden HTML panel loads this page
+// and sends each request in the URL fragment (#op.id.arg), which browsers
+// never send to the server. Replies go back through document.title.
+// Only the key below is touched.
+(function () {
+  "use strict";
+  var PREFIX = "HPV2P:";
+  var KEY = "hantu.hpcolors.v2/probe";
+  var load = Math.random().toString(36).slice(2, 8);
+  var seq = 0;
+
+  function checksum(text) {
+    var h = 0x811c9dc5;
+    for (var i = 0; i < text.length; i++) {
+      h ^= text.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return ("0000000" + h.toString(16)).slice(-8);
+  }
+
+  function reply(message) {
+    message.l = load;
+    message.s = ++seq;
+    document.title = PREFIX + JSON.stringify(message);
+  }
+
+  function describe(value) {
+    if (value === null) return { n: -1 };
+    return { n: value.length, c: checksum(value), head: value.slice(0, 80) };
+  }
+
+  function handle() {
+    var hash = location.hash.slice(1);
+    if (!hash) return reply({ o: "ready", i: "" });
+    var parts = hash.split(".");
+    var op = parts[0];
+    var id = parts[1] || "";
+    var arg = parts.length > 2 ? decodeURIComponent(parts.slice(2).join(".")) : "";
+    try {
+      if (op === "hello") {
+        var message = describe(localStorage.getItem(KEY));
+        message.o = "ready";
+        message.i = id;
+        message.hashLen = hash.length;
+        reply(message);
+      } else if (op === "w") {
+        localStorage.setItem(KEY, arg);
+        var stored = describe(localStorage.getItem(KEY));
+        stored.o = "w";
+        stored.i = id;
+        reply(stored);
+      } else if (op === "r") {
+        var read = describe(localStorage.getItem(KEY));
+        read.o = "r";
+        read.i = id;
+        reply(read);
+      } else {
+        reply({ o: "unknown", i: id });
+      }
+    } catch (error) {
+      reply({ o: "err", i: id, e: String(error).slice(0, 160) });
+    }
+  }
+
+  window.addEventListener("hashchange", handle);
+  handle();
+})();
+</script>
