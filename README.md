@@ -54,6 +54,85 @@ Only two keys:
 
 Every save is checksummed. The page rejects a save whose checksum is wrong, and the mod refuses to overwrite a save it could not read.
 
+## The fix in the mod
+
+From `hp_colors_rewrite_v2/panorama/scripts/hp_colors_v2_storage.js`. Lines marked `// …` are trimmed.
+
+**Before:** the mod opened a local page and sent it script. Since the 1 October update the panel turns both kinds of address into `about:blank`.
+
+```js
+var PAGE_URLS = ["file:///C:/", "file://"];
+
+panel.SetURL(PAGE_URLS[navigations - 1]);           // open the local page
+panel.SetURL("javascript:" + code + ";void(0);");   // run each request in it
+// code = "window.__hpv2s&&window.__hpv2s.r(...)"
+```
+
+**After:** the mod opens this `https://` page once, then sends each request as data after `#`.
+
+```js
+var PAGE_URL = "https://hantu-raya.github.io/hpv2-store/";
+var PAGE_VERSION = 1;
+
+function send(message) {
+  if (!isValid(panel)) return false;
+  try {
+    panel.SetURL(PAGE_URL + "#" + encodeURIComponent(JSON.stringify(message)));
+    return true;
+  } catch (error) {
+    log("SetURL threw: " + String(error));
+    return false;
+  }
+}
+
+// Example read request; `i` is new for every message so the address always changes.
+send({ "i": "h7", "r": "h6", "p": 0, "o": "r", "k": "hantu.hpcolors.v2/state" });
+```
+
+Replies still arrive through the page title. The mod trusts the page only when the `hello` reply comes from this exact address with the expected version:
+
+```js
+function isStoragePage(href) {
+  return typeof href === "string" && href.split("#")[0] === PAGE_URL;
+}
+
+function onReady(message) {
+  if (ready || unavailable || message.i !== helloId) return;
+  if (!isStoragePage(message.h)) {
+    log("ignored hello from untrusted page " + String(message.h).slice(0, 80));
+    return;
+  }
+  if (message.v !== PAGE_VERSION || message.ok !== true) {
+    markUnavailable("protocol_version (hosted page missing or incompatible)");
+    return;
+  }
+  ready = true;
+  // …
+}
+
+function onTitle(panelOrTitle, eventTitle) {
+  var title = arguments.length > 1 ? eventTitle : panelOrTitle;
+  if (typeof title !== "string" || !title) return;
+  if (title.indexOf(TITLE_PREFIX) !== 0) return;   // TITLE_PREFIX = "HPV2S1:"
+  // … parse the JSON after the prefix into `message`
+  if (message.o === "ready") onReady(message);
+  else onReply(message);
+}
+```
+
+On the page side, `index.html` runs each request when the `#` part changes (simplified):
+
+```js
+function handle() {
+  var request = JSON.parse(decodeURIComponent(location.hash.slice(1)));
+  // … run the hello, read, write or delete against localStorage
+  document.title = "HPV2S1:" + JSON.stringify(reply);
+}
+
+window.addEventListener("hashchange", handle);
+handle();   // also handles the request the page was first opened with
+```
+
 ## Privacy
 
 - Your settings never leave your PC. They travel in the part of the address after `#`, which browsers do not send to the server, and they are stored locally.
