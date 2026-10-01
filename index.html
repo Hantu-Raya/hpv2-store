@@ -1,68 +1,129 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>hpv2-store</title>
+<title>HP Colors v2 local storage</title>
 <script>
-// HP Colors v2 storage probe. Deadlock's hidden HTML panel loads this page
-// and sends each request in the URL fragment (#op.id.arg), which browsers
-// never send to the server. Replies go back through document.title.
-// Only the key below is touched.
+// Requests stay in the URL fragment and never go to GitHub Pages. Settings
+// stay in this origin's localStorage in Steam's CEF profile, not on a server.
 (function () {
   "use strict";
-  var PREFIX = "HPV2P:";
-  var KEY = "hantu.hpcolors.v2/probe";
-  var load = Math.random().toString(36).slice(2, 8);
-  var seq = 0;
+  var VERSION = 1;
+  var PREFIX = "HPV2S1:";
+  var CURRENT = "hantu.hpcolors.v2/state";
+  var PREVIOUS = "hantu.hpcolors.v2/state.prev";
+  var CHUNK = 3000;
+  var MAX_CHUNKS = 64;
+  var sequence = 0;
+  var readId = null;
+  var readKey = null;
+  var readValue = null;
+  var writeId = null;
+  var staging = null;
 
   function checksum(text) {
-    var h = 0x811c9dc5;
-    for (var i = 0; i < text.length; i++) {
-      h ^= text.charCodeAt(i);
-      h = Math.imul(h, 0x01000193) >>> 0;
+    var hash = 0x811c9dc5;
+    for (var index = 0; index < text.length; index++) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619) >>> 0;
     }
-    return ("0000000" + h.toString(16)).slice(-8);
+    return ("0000000" + hash.toString(16)).slice(-8);
+  }
+
+  function validRecord(value) {
+    if (typeof value !== "string") return false;
+    var parts = value.split(".");
+    return parts.length === 3 && parts[0] === "HPV2S1" &&
+      /^[0-9a-f]{8}$/.test(parts[1]) && checksum(parts[2]) === parts[1];
   }
 
   function reply(message) {
-    message.l = load;
-    message.s = ++seq;
-    document.title = PREFIX + JSON.stringify(message);
-  }
-
-  function describe(value) {
-    if (value === null) return { n: -1 };
-    return { n: value.length, c: checksum(value), head: value.slice(0, 80) };
+    message.q = ++sequence;
+    var title = PREFIX + JSON.stringify(message);
+    if (title.length > 4096)
+      title = PREFIX + JSON.stringify({ i: message.i, o: message.o, ok: false, e: "title_limit", q: sequence });
+    document.title = title;
   }
 
   function handle() {
-    var hash = location.hash.slice(1);
-    if (!hash) return reply({ o: "ready", i: "" });
-    var parts = hash.split(".");
-    var op = parts[0];
-    var id = parts[1] || "";
-    var arg = parts.length > 2 ? decodeURIComponent(parts.slice(2).join(".")) : "";
+    var request = null;
     try {
+      request = JSON.parse(decodeURIComponent(location.hash.slice(1)));
+      if (!request || typeof request.i !== "string" || request.i.length > 80)
+        return;
+      var id = request.i;
+      var op = request.o;
       if (op === "hello") {
-        var message = describe(localStorage.getItem(KEY));
-        message.o = "ready";
-        message.i = id;
-        message.hashLen = hash.length;
-        reply(message);
-      } else if (op === "w") {
-        localStorage.setItem(KEY, arg);
-        var stored = describe(localStorage.getItem(KEY));
-        stored.o = "w";
-        stored.i = id;
-        reply(stored);
-      } else if (op === "r") {
-        var read = describe(localStorage.getItem(KEY));
-        read.o = "r";
-        read.i = id;
-        reply(read);
-      } else {
-        reply({ o: "unknown", i: id });
+        reply({ i: id, o: "ready", ok: true, v: VERSION, h: location.href });
+        return;
       }
+      if (op === "d") {
+        localStorage.removeItem(PREVIOUS);
+        localStorage.removeItem(CURRENT);
+        readId = writeId = staging = null;
+        reply({ i: id, o: op, ok: true });
+        return;
+      }
+      if ((op !== "r" && op !== "w") || typeof request.r !== "string" ||
+          request.r.length > 80 || !Number.isInteger(request.p) ||
+          request.p < 0 || request.p >= MAX_CHUNKS)
+        throw new Error("invalid_request");
+      var part = request.p;
+      if (op === "r") {
+        if (request.k !== CURRENT && request.k !== PREVIOUS)
+          throw new Error("invalid_key");
+        // One stable snapshot per logical read, across unique message ids.
+        if (readId !== request.r || readKey !== request.k) {
+          readId = request.r;
+          readKey = request.k;
+          readValue = localStorage.getItem(readKey);
+        }
+        if (readValue === null) {
+          reply({ i: id, o: op, ok: true, x: 0, p: part });
+          return;
+        }
+        var total = Math.max(1, Math.ceil(readValue.length / CHUNK));
+        reply({ i: id, o: op, ok: true, x: 1, p: part, n: total,
+          v: readValue.slice(part * CHUNK, (part + 1) * CHUNK) });
+        return;
+      }
+      if (!Number.isInteger(request.n) || request.n < 1 ||
+          request.n > MAX_CHUNKS || part >= request.n ||
+          typeof request.v !== "string" || request.v.length > CHUNK ||
+          typeof request.e !== "string")
+        throw new Error("invalid_chunk");
+      if (writeId !== request.r) {
+        if (part !== 0) throw new Error("missing_chunk");
+        writeId = request.r;
+        staging = { count: 0, chunks: [], total: request.n, expected: request.e };
+      }
+      if (staging.total !== request.n || staging.expected !== request.e)
+        throw new Error("changed_write");
+      if (staging.chunks[part] === undefined) {
+        staging.chunks[part] = request.v;
+        staging.count++;
+      } else if (staging.chunks[part] !== request.v) {
+        throw new Error("changed_chunk");
+      }
+      if (staging.count < staging.total) {
+        reply({ i: id, o: op, ok: true, p: part, n: request.n });
+        return;
+      }
+      var value = staging.chunks.join("");
+      writeId = staging = null;
+      if (!validRecord(value)) throw new Error("checksum");
+      var current = localStorage.getItem(CURRENT);
+      // Only rotate a checksum that Panorama classified as valid (or wrote).
+      // Replaying a commit after a lost ack must not rotate the backup twice.
+      if (request.e && current !== null && current !== value &&
+          current.split(".")[1] === request.e && validRecord(current))
+        localStorage.setItem(PREVIOUS, current);
+      localStorage.setItem(CURRENT, value);
+      reply({ i: id, o: op, ok: true, p: part, n: request.n, d: 1 });
     } catch (error) {
-      reply({ o: "err", i: id, e: String(error).slice(0, 160) });
+      if (request && request.o === "w") writeId = staging = null;
+      if (request && request.o === "r") readId = null;
+      if (request && typeof request.i === "string")
+        reply({ i: request.i.slice(0, 80), o: String(request.o).slice(0, 12),
+          ok: false, e: String(error).slice(0, 160) });
     }
   }
 
