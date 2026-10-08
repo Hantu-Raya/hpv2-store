@@ -54,6 +54,16 @@ Only two keys:
 
 Every save is checksummed. The page rejects a save whose checksum is wrong, and the mod refuses to overwrite a save it could not read.
 
+### Buff Timer page (`/bt/`)
+
+`bt/index.html` (<https://hantu-raya.github.io/hpv2-store/bt/>) saves the settings of the Buff Timer mod (pak98, `buff_timer_virgin/` in Deadlock-mods-collection). It uses the same `#` request / title reply transport, with these differences:
+
+- Replies start with `BTS1:` and the page has its own `VERSION` (1). Changing it never affects the HP Colors page above.
+- It stores one key, `hantu.bufftimer.v1/settings`, a checksummed record of a few hundred characters at most. Requests are single messages: `hello`, `r` (read) and `w` (write, field `v` = the record). There is no chunking, backup key or delete.
+- It never reads, writes or deletes the HP Colors keys. Both pages share this site's storage, so that is a rule of the code, not a browser boundary.
+
+The mod-side end-to-end test is `buff_timer_virgin/scripts/validate-settings-store.js`; it runs this page's script against a simulated game panel.
+
 ## The fix in the mod
 
 From `hp_colors_rewrite_v2/panorama/scripts/hp_colors_v2_storage.js`. Lines marked `// …` are trimmed.

@@ -1,0 +1,67 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Buff Timer local storage</title>
+<script>
+// Buff Timer (pak98) settings page. Same fragment-in / title-out transport as
+// the HP Colors v2 page at ../, but its own prefix, version and single key, so
+// it never reads, writes or deletes HP Colors data. Settings stay in this
+// origin's localStorage in Steam's CEF profile, not on a server.
+(function () {
+  "use strict";
+  var VERSION = 1;
+  var PREFIX = "BTS1:";
+  var KEY = "hantu.bufftimer.v1/settings";
+  var MAX_RECORD = 512;
+
+  function checksum(text) {
+    var hash = 0x811c9dc5;
+    for (var index = 0; index < text.length; index++) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619) >>> 0;
+    }
+    return ("0000000" + hash.toString(16)).slice(-8);
+  }
+
+  // BTS1.<fnv1a32 hex>.<body>; the body may contain dots.
+  function validRecord(value) {
+    if (typeof value !== "string" || value.length > MAX_RECORD) return false;
+    if (value.slice(0, 5) !== "BTS1.") return false;
+    var sum = value.slice(5, 13);
+    return value.charAt(13) === "." && /^[0-9a-f]{8}$/.test(sum) && checksum(value.slice(14)) === sum;
+  }
+
+  function reply(message) {
+    document.title = PREFIX + JSON.stringify(message);
+  }
+
+  function handle() {
+    var request = null;
+    try {
+      request = JSON.parse(decodeURIComponent(location.hash.slice(1)));
+      if (!request || typeof request.i !== "string" || request.i.length > 80) return;
+      if (request.o === "hello") {
+        reply({ i: request.i, o: "ready", ok: true, v: VERSION, h: location.href });
+        return;
+      }
+      if (request.o === "r") {
+        var value = localStorage.getItem(KEY);
+        reply(value === null ? { i: request.i, o: "r", ok: true, x: 0 } : { i: request.i, o: "r", ok: true, x: 1, v: value });
+        return;
+      }
+      if (request.o === "w") {
+        if (!validRecord(request.v)) throw new Error("checksum");
+        localStorage.setItem(KEY, request.v);
+        reply({ i: request.i, o: "w", ok: true });
+        return;
+      }
+      throw new Error("invalid_request");
+    } catch (error) {
+      if (request && typeof request.i === "string")
+        reply({ i: request.i.slice(0, 80), o: String(request.o).slice(0, 12), ok: false, e: String(error).slice(0, 160) });
+    }
+  }
+
+  window.addEventListener("hashchange", handle);
+  handle();
+})();
+</script>
