@@ -64,6 +64,16 @@ Every save is checksummed. The page rejects a save whose checksum is wrong, and 
 
 The mod-side end-to-end test is `buff_timer_virgin/scripts/validate-settings-store.js`; it runs this page's script against a simulated game panel.
 
+### DLF broadcast page (`/dlf/`)
+
+`dlf/index.html` (<https://hantu-raya.github.io/hpv2-store/dlf/>) saves the match details of the DLF observer HUD (pak01, `dlf/` in Deadlock-mods-collection): season and match numbers, series format, team names, series scores and hero bans. It follows the Buff Timer page's rules:
+
+- Replies start with `DLFS1:` and the page has its own `VERSION` (1).
+- It stores one key, `hantu.dlf.v1/match`, a checksummed record of at most 1024 characters. Requests are `hello`, `r` and `w`; there is no chunking, backup key or delete.
+- It never reads, writes or deletes the HP Colors or Buff Timer keys.
+
+The mod-side end-to-end test is `dlf/scripts/validate-dlf.js`; it runs this page's script against a simulated game panel.
+
 ## The fix in the mod
 
 From `hp_colors_rewrite_v2/panorama/scripts/hp_colors_v2_storage.js`. Lines marked `// …` are trimmed.
@@ -162,5 +172,6 @@ The page reports a protocol version (`VERSION` in `index.html`, currently `1`). 
 ## Files
 
 - `index.html`: the whole page. A single inline script handles the requests; it has no dependencies.
+- `bt/index.html`, `dlf/index.html`: the Buff Timer and DLF broadcast pages, each with its own key and version.
 
 The mod side is `hp_colors_rewrite_v2/panorama/scripts/hp_colors_v2_storage.js` in [Deadlock-mods-collection](https://github.com/Hantu-Raya/Deadlock-mods-collection). Its end-to-end tests (`scripts/validate-hp-colors-rewrite-v2-storage.test.js`) run this page's script against a simulated game panel.
