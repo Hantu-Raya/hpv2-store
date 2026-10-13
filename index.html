@@ -10,6 +10,7 @@
   var PREFIX = "HPV2S1:";
   var CURRENT = "hantu.hpcolors.v2/state";
   var PREVIOUS = "hantu.hpcolors.v2/state.prev";
+  var KEY_PATTERN = /^hantu\.hpcolors\.v\d+\/state(\.prev)?$/;
   var CHUNK = 3000;
   var MAX_CHUNKS = 64;
   var sequence = 0;
@@ -35,6 +36,10 @@
       /^[0-9a-f]{8}$/.test(parts[1]) && checksum(parts[2]) === parts[1];
   }
 
+  function validKey(key) {
+    return typeof key === "string" && KEY_PATTERN.test(key);
+  }
+
   function reply(message) {
     message.q = ++sequence;
     var title = PREFIX + JSON.stringify(message);
@@ -52,12 +57,17 @@
       var id = request.i;
       var op = request.o;
       if (op === "hello") {
-        reply({ i: id, o: "ready", ok: true, v: VERSION, h: location.href });
+        reply({ i: id, o: "ready", ok: true, v: VERSION, h: location.href, c: ["vkeys"] });
         return;
       }
       if (op === "d") {
-        localStorage.removeItem(PREVIOUS);
-        localStorage.removeItem(CURRENT);
+        if (request.k === undefined) {
+          localStorage.removeItem(PREVIOUS);
+          localStorage.removeItem(CURRENT);
+        } else {
+          if (!validKey(request.k)) throw new Error("invalid_key");
+          localStorage.removeItem(request.k);
+        }
         readId = writeId = staging = null;
         reply({ i: id, o: op, ok: true });
         return;
@@ -68,8 +78,7 @@
         throw new Error("invalid_request");
       var part = request.p;
       if (op === "r") {
-        if (request.k !== CURRENT && request.k !== PREVIOUS)
-          throw new Error("invalid_key");
+        if (!validKey(request.k)) throw new Error("invalid_key");
         // One stable snapshot per logical read, across unique message ids.
         if (readId !== request.r || readKey !== request.k) {
           readId = request.r;
@@ -85,6 +94,8 @@
           v: readValue.slice(part * CHUNK, (part + 1) * CHUNK) });
         return;
       }
+      var key = request.k === undefined ? CURRENT : request.k;
+      if (!validKey(key)) throw new Error("invalid_key");
       if (!Number.isInteger(request.n) || request.n < 1 ||
           request.n > MAX_CHUNKS || part >= request.n ||
           typeof request.v !== "string" || request.v.length > CHUNK ||
@@ -93,9 +104,9 @@
       if (writeId !== request.r) {
         if (part !== 0) throw new Error("missing_chunk");
         writeId = request.r;
-        staging = { count: 0, chunks: [], total: request.n, expected: request.e };
+        staging = { count: 0, chunks: [], total: request.n, expected: request.e, key: key };
       }
-      if (staging.total !== request.n || staging.expected !== request.e)
+      if (staging.total !== request.n || staging.expected !== request.e || staging.key !== key)
         throw new Error("changed_write");
       if (staging.chunks[part] === undefined) {
         staging.chunks[part] = request.v;
@@ -110,13 +121,14 @@
       var value = staging.chunks.join("");
       writeId = staging = null;
       if (!validRecord(value)) throw new Error("checksum");
-      var current = localStorage.getItem(CURRENT);
+      var current = localStorage.getItem(key);
+      var previous = key.slice(-5) === ".prev" ? null : key + ".prev";
       // Only rotate a checksum that Panorama classified as valid (or wrote).
       // Replaying a commit after a lost ack must not rotate the backup twice.
-      if (request.e && current !== null && current !== value &&
+      if (previous && request.e && current !== null && current !== value &&
           current.split(".")[1] === request.e && validRecord(current))
-        localStorage.setItem(PREVIOUS, current);
-      localStorage.setItem(CURRENT, value);
+        localStorage.setItem(previous, current);
+      localStorage.setItem(key, value);
       reply({ i: id, o: op, ok: true, p: part, n: request.n, d: 1 });
     } catch (error) {
       if (request && request.o === "w") writeId = staging = null;

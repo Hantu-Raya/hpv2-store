@@ -1,6 +1,6 @@
 # hpv2-store
 
-The save page for the **HP Colors v2** Deadlock mod. The mod loads this page in a hidden browser panel inside the game and uses it to keep your settings on your PC between game launches.
+The save page for the **HP Colors v2/v3** Deadlock mods. The mods load this page in a hidden browser panel inside the game and use it to keep settings on your PC between game launches.
 
 Live page: <https://hantu-raya.github.io/hpv2-store/>
 
@@ -35,22 +35,23 @@ Each request is `#` followed by URL-encoded JSON:
 | `o` | Operation: `hello`, `r` (read), `w` (write), `d` (delete). |
 | `r` | Id of the whole read or write. It stays the same across that operation's chunks. |
 | `p` | Chunk index. |
-| `k` | Read only: which key to read (current save or backup). |
+| `k` | Required on reads; optional on writes and deletes. A keyless write targets `hantu.hpcolors.v2/state`; a keyless delete removes both v2 keys. A keyed delete removes only its named key. |
 | `n`, `v` | Write only: total chunk count and this chunk's text. |
-| `e` | Write only: checksum of the save the mod last verified. The page moves the old save to the backup key only when it matches. |
+| `e` | Write only: checksum of the save the mod last verified. The page moves an old current save to that version's `.prev` key only when it matches. |
 
 Saves are sent in chunks of up to 3,000 characters (64 chunks at most) because replies travel in the page title, which the game caps at 4,096 characters.
 
 ### Replies (page → mod)
 
-The page sets its title to `HPV2S1:` followed by JSON with the same `i` and `o`, `ok: true` or `ok: false` with an error, and the result. A `hello` reply also carries the page's protocol version `v` and its address `h`. The mod ignores replies whose id it is not waiting for, and accepts the `hello` only from this page's exact address.
+The page sets its title to `HPV2S1:` followed by JSON with the same `i` and `o`, `ok: true` or `ok: false` with an error, and the result. A `hello` reply also carries the page's protocol version `v: 1`, its address `h`, and `c: ["vkeys"]` (versioned-key capability). v2 checks `v` and `h` and ignores `c`; v3 must require `c` so an old cached page fails closed. The mod ignores replies whose id it is not waiting for, and accepts the `hello` only from this page's exact address.
 
 ### What it stores
 
-Only two keys:
+Only keys matching `^hantu\.hpcolors\.v\d+/state(\.prev)?$` may be read, written or deleted. In particular:
 
-- `hantu.hpcolors.v2/state`: the current save.
-- `hantu.hpcolors.v2/state.prev`: the previous save, kept as a backup.
+- `hantu.hpcolors.v2/state`: the v2 current save.
+- `hantu.hpcolors.v2/state.prev`: the v2 previous save, kept as a backup.
+- `hantu.hpcolors.v3/state` and `hantu.hpcolors.v3/state.prev`: separate v3 save and backup.
 
 Every save is checksummed. The page rejects a save whose checksum is wrong, and the mod refuses to overwrite a save it could not read.
 
@@ -167,7 +168,7 @@ handle();   // also handles the request the page was first opened with
 
 ## Versioning
 
-The page reports a protocol version (`VERSION` in `index.html`, currently `1`). The mod saves only when it matches the version it was built for. Otherwise it stops saving instead of risking your data. Any change to the request or reply format must raise the version, and the mod has to be updated with it.
+The page reports protocol version `1` (`VERSION` in `index.html`) and a `vkeys` capability in its ready reply. Installed v2 mods require exactly version 1; v3 must also require the capability to reject a cached old page. The added optional key field and capability leave v2 messages and replies intact. Incompatible changes to the v2 format must update both the page and bridge before release.
 
 ## Files
 
