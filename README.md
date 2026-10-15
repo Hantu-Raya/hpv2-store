@@ -38,12 +38,13 @@ Each request is `#` followed by URL-encoded JSON:
 | `k` | Required on reads; optional on writes and deletes. A keyless write targets `hantu.hpcolors.v2/state`; a keyless delete removes both v2 keys. A keyed delete removes only its named key. |
 | `n`, `v` | Write only: total chunk count and this chunk's text. |
 | `e` | Write only: checksum of the save the mod last verified. The page moves an old current save to that version's `.prev` key only when it matches. |
+| `m` | Write only, optional (`cas` capability): the checksum of the whole value the mod last saw at the target key, or `none` if it saw no value. The page commits only if the key still holds that value (or already holds the value being written, for a retried commit); otherwise it refuses with `conflict` and the mod reloads. Writes without `m` (v2) are unconditional, as before. |
 
 Saves are sent in chunks of up to 3,000 characters (64 chunks at most) because replies travel in the page title, which the game caps at 4,096 characters.
 
 ### Replies (page → mod)
 
-The page sets its title to `HPV2S1:` followed by JSON with the same `i` and `o`, `ok: true` or `ok: false` with an error, and the result. A `hello` reply also carries the page's protocol version `v: 1`, its address `h`, and `c: ["vkeys"]` (versioned-key capability). v2 checks `v` and `h` and ignores `c`; v3 must require `c` so an old cached page fails closed. The mod ignores replies whose id it is not waiting for, and accepts the `hello` only from this page's exact address.
+The page sets its title to `HPV2S1:` followed by JSON with the same `i` and `o`, `ok: true` or `ok: false` with an error, and the result. A `hello` reply also carries the page's protocol version `v: 1`, its address `h`, and `c: ["vkeys", "cas"]` (versioned-key and compare-at-commit capabilities). v2 checks `v` and `h` and ignores `c`; v3 requires both capabilities so an old cached page fails closed. The mod ignores replies whose id it is not waiting for, and accepts the `hello` only from this page's exact address.
 
 ### What it stores
 
@@ -53,7 +54,7 @@ Only keys matching `^hantu\.hpcolors\.v\d+/state(\.prev)?$` may be read, written
 - `hantu.hpcolors.v2/state.prev`: the v2 previous save, kept as a backup.
 - `hantu.hpcolors.v3/state` and `hantu.hpcolors.v3/state.prev`: separate v3 save and backup.
 
-Every save is checksummed. The page rejects a save whose checksum is wrong, and the mod refuses to overwrite a save it could not read.
+Every save is checksummed. The page rejects a save whose checksum is wrong, and the mod refuses to overwrite a save it could not read. A v3 save also names the value it expects to replace (`m`), so a save written meanwhile by another game window or a newer mod version is never overwritten.
 
 ### Buff Timer page (`/bt/`)
 
@@ -168,7 +169,7 @@ handle();   // also handles the request the page was first opened with
 
 ## Versioning
 
-The page reports protocol version `1` (`VERSION` in `index.html`) and a `vkeys` capability in its ready reply. Installed v2 mods require exactly version 1; v3 must also require the capability to reject a cached old page. The added optional key field and capability leave v2 messages and replies intact. Incompatible changes to the v2 format must update both the page and bridge before release.
+The page reports protocol version `1` (`VERSION` in `index.html`) and the `vkeys` and `cas` capabilities in its ready reply. Installed v2 mods require exactly version 1; v3 also requires both capabilities to reject a cached old page. The added optional key field, the optional `m` write field and the capabilities leave v2 messages and replies intact. Incompatible changes to the v2 format must update both the page and bridge before release.
 
 ## Files
 

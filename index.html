@@ -57,7 +57,7 @@
       var id = request.i;
       var op = request.o;
       if (op === "hello") {
-        reply({ i: id, o: "ready", ok: true, v: VERSION, h: location.href, c: ["vkeys"] });
+        reply({ i: id, o: "ready", ok: true, v: VERSION, h: location.href, c: ["vkeys", "cas"] });
         return;
       }
       if (op === "d") {
@@ -99,14 +99,17 @@
       if (!Number.isInteger(request.n) || request.n < 1 ||
           request.n > MAX_CHUNKS || part >= request.n ||
           typeof request.v !== "string" || request.v.length > CHUNK ||
-          typeof request.e !== "string")
+          typeof request.e !== "string" ||
+          (request.m !== undefined && (typeof request.m !== "string" ||
+            !/^(none|[0-9a-f]{8})$/.test(request.m))))
         throw new Error("invalid_chunk");
       if (writeId !== request.r) {
         if (part !== 0) throw new Error("missing_chunk");
         writeId = request.r;
-        staging = { count: 0, chunks: [], total: request.n, expected: request.e, key: key };
+        staging = { count: 0, chunks: [], total: request.n, expected: request.e, key: key, match: request.m };
       }
-      if (staging.total !== request.n || staging.expected !== request.e || staging.key !== key)
+      if (staging.total !== request.n || staging.expected !== request.e || staging.key !== key ||
+          staging.match !== request.m)
         throw new Error("changed_write");
       if (staging.chunks[part] === undefined) {
         staging.chunks[part] = request.v;
@@ -123,6 +126,13 @@
       if (!validRecord(value)) throw new Error("checksum");
       var current = localStorage.getItem(key);
       var previous = key.slice(-5) === ".prev" ? null : key + ".prev";
+      // "cas" capability: a write carrying m (checksum of the whole value it
+      // last saw at this key, or "none") replaces only that value. A changed
+      // value is refused so a newer save is never overwritten. Writes without
+      // m (v2) keep the unconditional behaviour.
+      if (request.m !== undefined && current !== value &&
+          request.m !== (current === null ? "none" : checksum(current)))
+        throw new Error("conflict");
       // Only rotate a checksum that Panorama classified as valid (or wrote).
       // Replaying a commit after a lost ack must not rotate the backup twice.
       if (previous && request.e && current !== null && current !== value &&
