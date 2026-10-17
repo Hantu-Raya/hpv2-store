@@ -32,19 +32,22 @@ Each request is `#` followed by URL-encoded JSON:
 | Field | Meaning |
 |---|---|
 | `i` | Unique message id. Every message has a new id, so the address always changes and the page always sees it. |
-| `o` | Operation: `hello`, `r` (read), `w` (write), `d` (delete). |
+| `o` | Operation: `hello`, `r` (read), `w` (write), `d` (delete), `lv` (latest release, `latest` capability). |
 | `r` | Id of the whole read or write. It stays the same across that operation's chunks. |
 | `p` | Chunk index. |
 | `k` | Required on reads; optional on writes and deletes. A keyless write targets `hantu.hpcolors.v2/state`; a keyless delete removes both v2 keys. A keyed delete removes only its named key. |
 | `n`, `v` | Write only: total chunk count and this chunk's text. |
 | `e` | Write only: checksum of the save the mod last verified. The page moves an old current save to that version's `.prev` key only when it matches. |
 | `m` | Write only, optional (`cas` capability): the checksum of the whole value the mod last saw at the target key, or `none` if it saw no value. The page commits only if the key still holds that value (or already holds the value being written, for a retried commit); otherwise it refuses with `conflict` and the mod reloads. Writes without `m` (v2) are unconditional, as before. |
+| `a` | `lv` only: the mod's id in `latest.json`, 1-16 lowercase letters or digits (HP Colors v3 sends `hpv3`). |
 
 Saves are sent in chunks of up to 3,000 characters (64 chunks at most) because replies travel in the page title, which the game caps at 4,096 characters.
 
 ### Replies (page → mod)
 
-The page sets its title to `HPV2S1:` followed by JSON with the same `i` and `o`, `ok: true` or `ok: false` with an error, and the result. A `hello` reply also carries the page's protocol version `v: 1`, its address `h`, and `c: ["vkeys", "cas"]` (versioned-key and compare-at-commit capabilities). v2 checks `v` and `h` and ignores `c`; v3 requires both capabilities so an old cached page fails closed. The mod ignores replies whose id it is not waiting for, and accepts the `hello` only from this page's exact address.
+The page sets its title to `HPV2S1:` followed by JSON with the same `i` and `o`, `ok: true` or `ok: false` with an error, and the result. A `hello` reply also carries the page's protocol version `v: 1`, its address `h`, and `c: ["vkeys", "cas", "latest"]` (versioned-key, compare-at-commit and latest-release capabilities). v2 checks `v` and `h` and ignores `c`; v3 requires `vkeys` and `cas` so an old cached page fails closed, and asks `lv` only when `latest` is listed. The mod ignores replies whose id it is not waiting for, and accepts the `hello` only from this page's exact address.
+
+An `lv` reply carries `l`, the newest released version for `a` as `X.Y.Z` (or `null` when unknown or malformed); `d`, that release's download page per build (`{"normal": url, "qollock": url}`, only `https://gamebanana.com/` links, or `null`); and `s`: `pending` while the page's first fetch of `latest.json` is still loading, otherwise `done`. The page fetches `./latest.json?n=<time>` with `cache: "no-store"` once when it loads and again at most every 10 minutes (every minute after a failure), triggered only by `lv` requests. It answers from the copy it already holds and never writes the title on its own, so each title still answers one request. GitHub Pages can serve an older `latest.json` for a few minutes after a push.
 
 ### What it stores
 
@@ -169,11 +172,14 @@ handle();   // also handles the request the page was first opened with
 
 ## Versioning
 
-The page reports protocol version `1` (`VERSION` in `index.html`) and the `vkeys` and `cas` capabilities in its ready reply. Installed v2 mods require exactly version 1; v3 also requires both capabilities to reject a cached old page. The added optional key field, the optional `m` write field and the capabilities leave v2 messages and replies intact. Incompatible changes to the v2 format must update both the page and bridge before release.
+The page reports protocol version `1` (`VERSION` in `index.html`) and the `vkeys`, `cas` and `latest` capabilities in its ready reply. Installed v2 mods require exactly version 1; v3 also requires `vkeys` and `cas` to reject a cached old page. The added optional key field, the optional `m` write field, the `lv` operation and the capabilities leave v2 messages and replies intact. Incompatible changes to the v2 format must update both the page and bridge before release.
+
+`latest.json` lists the newest **released** version of each mod and, under `download`, its GameBanana download page per build (`{"hpv3": "3.1.0", "download": {"hpv3": {"normal": url, "qollock": url}}}`). The mod validates each link again and offers DOWNLOAD only for its own build. Raise a mod's entry, and point its links at the new files, only after that release is downloadable; a 3.0.x HP Colors v3 never asks, and any release whose version is lower than the entry warns its players once per game session.
 
 ## Files
 
 - `index.html`: the whole page. A single inline script handles the requests; it has no dependencies.
+- `latest.json`: newest released version per mod, read by the page (see Versioning).
 - `bt/index.html`, `dlf/index.html`: the Buff Timer and DLF broadcast pages, each with its own key and version.
 
 The mod side is `hp_colors_rewrite_v2/panorama/scripts/hp_colors_v2_storage.js` in [Deadlock-mods-collection](https://github.com/Hantu-Raya/Deadlock-mods-collection). Its end-to-end tests (`scripts/validate-hp-colors-rewrite-v2-storage.test.js`) run this page's script against a simulated game panel.
