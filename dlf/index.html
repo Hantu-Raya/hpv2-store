@@ -11,7 +11,8 @@
   var VERSION = 1;
   var PREFIX = "DLFS1:";
   var KEY = "hantu.dlf.v1/match";
-  var MAX_RECORD = 1024;
+  // Advertised as m in the ready reply; the menu treats a page without m as the original 1024.
+  var MAX_RECORD = 4096;
 
   function checksum(text) {
     var hash = 0x811c9dc5;
@@ -40,7 +41,7 @@
       request = JSON.parse(decodeURIComponent(location.hash.slice(1)));
       if (!request || typeof request.i !== "string" || request.i.length > 80) return;
       if (request.o === "hello") {
-        reply({ i: request.i, o: "ready", ok: true, v: VERSION, h: location.href });
+        reply({ i: request.i, o: "ready", ok: true, v: VERSION, m: MAX_RECORD, h: location.href });
         return;
       }
       if (request.o === "r") {
@@ -52,6 +53,12 @@
         if (!validRecord(request.v)) throw new Error("checksum");
         localStorage.setItem(KEY, request.v);
         reply({ i: request.i, o: "w", ok: true });
+        return;
+      }
+      // FORGET SAVE in the DLF editor: deletes this page's one key (never another page's).
+      if (request.o === "d") {
+        localStorage.removeItem(KEY);
+        reply({ i: request.i, o: "d", ok: true });
         return;
       }
       throw new Error("invalid_request");
