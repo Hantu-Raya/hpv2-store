@@ -20,7 +20,7 @@
   var writeId = null;
   var staging = null;
   // "latest" capability: the newest released version of each mod, read from latest.json on this
-  // same origin ({"hpv3": "3.1.0", "download": {"hpv3": {"normal": url, "qollock": url}}}). The
+  // same origin ({"hpv3": "3.1.0", "download": {"hpv3": {"normal": url, "qollock": url, "showrank": url}}}). The
   // fetch runs in the background; an "lv" request is answered at once from the copy already held,
   // so every title write still answers exactly one request.
   var LATEST_RETRY_MS = 60000;
@@ -50,14 +50,14 @@
     return typeof version === "string" && /^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(version) ? version : null;
   }
 
-  // Download pages per build ("normal", "qollock"); only plain GameBanana HTTPS links are passed on.
+  // Download pages per build ("normal", "qollock", "showrank"); only plain GameBanana HTTPS links are passed on.
   var DOWNLOAD_URL = /^https:\/\/gamebanana\.com\/[A-Za-z0-9\/_#.?=&%-]{1,200}$/;
   function latestDownloads(app) {
     var all = latest && Object.prototype.hasOwnProperty.call(latest, "download") ? latest.download : null;
     var own = all && typeof all === "object" && Object.prototype.hasOwnProperty.call(all, app) ? all[app] : null;
     if (!own || typeof own !== "object" || Array.isArray(own)) return null;
     var links = null;
-    ["normal", "qollock"].forEach(function (build) {
+    ["normal", "qollock", "showrank"].forEach(function (build) {
       var url = Object.prototype.hasOwnProperty.call(own, build) ? own[build] : null;
       if (typeof url === "string" && DOWNLOAD_URL.test(url)) (links = links || {})[build] = url;
     });
