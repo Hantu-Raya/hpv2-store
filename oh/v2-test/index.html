@@ -1,0 +1,243 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Observer HUD local storage v2 (temporary test copy)</title>
+<script>
+// Observer HUD (pak10) tournament setup and match page, version 2. Same fragment-in / title-out transport
+// as ../ (v1, which stays untouched for released paks), but its own prefix, keys and ops. The data stays
+// in this origin's localStorage in Steam's CEF profile, not on a server. Keys (never the HP Colors, Buff
+// Timer, DLF or v1 keys; v1's state key is only read, once, to migrate):
+//   <BASE>/state    OHS1.<fnv1a32>.<{s:1,state}>, at most 8192 chars (the editor's whole setup)
+//   <BASE>/matches  { v:2, T:[[name,tag,logo],...], m:[{a,b,t:[i,j],o,w,id,at},...] } at most 32768 chars
+// Replies are cut at 4096 chars by the game (HTMLTitle), so no reply may be longer than TITLE_MAX: the
+// state is read in pieces (r with s = offset) and one match card is asked for by its accounts (q).
+// Ops (request {i,o,...} in the URL fragment): hello, r, w, u, q.
+(function () {
+  "use strict";
+  var VERSION = 2;
+  var PREFIX = "OHS2:";
+  var BASE = "hantu.observer_hud.v2test"; // TEMPORARY probe copy: own keys, removed after testing
+  var KEY_STATE = BASE + "/state";
+  var KEY_MATCHES = BASE + "/matches";
+  var KEY_V1 = "hantu.observer_hud.v1/state";
+  var MAX_STATE = 8192;
+  var MAX_MATCHES = 32768;
+  var MAX_CARD = 2400;
+  var TITLE_MAX = 4000;
+  var MATCH_MIN = 10; // accounts a stored card must share with the asked roster
+  var MAX_URL = 512;
+
+  function checksum(text) {
+    var hash = 0x811c9dc5;
+    for (var index = 0; index < text.length; index++) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619) >>> 0;
+    }
+    return ("0000000" + hash.toString(16)).slice(-8);
+  }
+
+  // OHS1.<fnv1a32 hex>.<body>; the body may contain dots.
+  function validRecord(value) {
+    if (typeof value !== "string" || value.length > MAX_STATE) return false;
+    if (value.slice(0, 5) !== "OHS1.") return false;
+    var sum = value.slice(5, 13);
+    return value.charAt(13) === "." && /^[0-9a-f]{8}$/.test(sum) && checksum(value.slice(14)) === sum;
+  }
+
+  function reply(message) {
+    var title = PREFIX + JSON.stringify(message);
+    if (title.length > TITLE_MAX + 90) title = PREFIX + JSON.stringify({ i: message.i, o: message.o, ok: false, e: "too_long" });
+    document.title = title;
+  }
+
+  // --- cards -------------------------------------------------------------------------------------------
+  function account(value) {
+    var n = typeof value === "string" && /^[1-9]\d{0,9}$/.test(value) ? Number(value) : value;
+    return typeof n === "number" && n % 1 === 0 && n >= 1 && n <= 4294967295 ? n : 0;
+  }
+  function accountList(raw, taken) {
+    var out = [];
+    if (!Array.isArray(raw) || raw.length > 6) return null;
+    for (var i = 0; i < raw.length; i++) {
+      var n = account(raw[i]);
+      if (!n || taken[n]) return null;
+      taken[n] = true;
+      out.push(n);
+    }
+    return out;
+  }
+  function text(value, max) {
+    if (typeof value !== "string") return "";
+    var t = value.replace(/\s+/g, " ").trim();
+    return t.length <= max ? t : "";
+  }
+  function url(value) {
+    if (typeof value !== "string") return "";
+    var u = value.trim();
+    if (!u || u.length > MAX_URL || /[\x00-\x20\x7f\\]/.test(u)) return "";
+    return /^https?:\/\/[A-Za-z0-9.-]+(:\d{1,5})?([\/?#].*)?$/i.test(u) ? u : "";
+  }
+  // A card as the pak sends it: { a:[ids], b:[ids], t:[[name,tag,logo],[name,tag,logo]], r:[org,logo]|0, w, id, at };
+  // returns the clean card or null. Names and URLs that are not valid become "" (the stock name shows).
+  function cleanCard(c) {
+    if (!c || typeof c !== "object") return null;
+    var taken = {};
+    var a = accountList(c.a, taken);
+    var b = accountList(c.b, taken);
+    if (!a || !b || a.length + b.length < 2) return null;
+    if (!Array.isArray(c.t) || c.t.length !== 2) return null;
+    var t = [];
+    for (var i = 0; i < 2; i++) {
+      var e = c.t[i];
+      if (!Array.isArray(e) || e.length !== 3) return null;
+      t.push([text(e[0], 28), text(e[1], 4).toUpperCase(), url(e[2])]);
+    }
+    var r = Array.isArray(c.r) && c.r.length === 2 ? [text(c.r[0], 24), url(c.r[1])] : 0;
+    if (r && !r[0] && !r[1]) r = 0;
+    var card = {
+      a: a, b: b, t: t, r: r, w: c.w === 1 || c.w === 2 ? c.w : 0,
+      id: typeof c.id === "string" && /^\d{1,12}$/.test(c.id) ? c.id : "",
+      at: typeof c.at === "number" && c.at % 1 === 0 && c.at >= 0 && c.at < 4e9 ? c.at : 0
+    };
+    return JSON.stringify(card).length <= MAX_CARD ? card : null;
+  }
+  function overlap(card, wanted) {
+    var n = 0;
+    for (var i = 0; i < card.a.length; i++) if (wanted[card.a[i]]) n++;
+    for (var j = 0; j < card.b.length; j++) if (wanted[card.b[j]]) n++;
+    return n;
+  }
+
+  // --- the matches key ----------------------------------------------------------------------------------
+  // Stored compactly: teams (and the organiser) are listed once in T and referenced by index.
+  function load() {
+    try {
+      var data = JSON.parse(localStorage.getItem(KEY_MATCHES) || "null");
+      if (data && data.v === 2 && Array.isArray(data.T) && Array.isArray(data.m)) {
+        var cards = [];
+        for (var i = 0; i < data.m.length; i++) {
+          var m = data.m[i];
+          var t0 = data.T[m.t[0]], t1 = data.T[m.t[1]], org = m.o >= 0 ? data.T[m.o] : null;
+          var card = cleanCard({ a: m.a, b: m.b, t: [t0, t1], r: org ? [org[0], org[2]] : 0, w: m.w, id: m.id || "", at: m.at });
+          if (card) cards.push(card);
+        }
+        return cards;
+      }
+    } catch (error) { /* unreadable: start empty */ }
+    return [];
+  }
+  function pack(cards) {
+    var T = [];
+    var seen = {};
+    function team(e) {
+      var key = JSON.stringify(e);
+      if (seen[key] === undefined) { seen[key] = T.length; T.push(e); }
+      return seen[key];
+    }
+    var m = cards.map(function (c) {
+      var entry = { a: c.a, b: c.b, t: [team(c.t[0]), team(c.t[1])], o: c.r ? team([c.r[0], "", c.r[1]]) : -1, w: c.w, at: c.at };
+      if (c.id) entry.id = c.id;
+      return entry;
+    });
+    return JSON.stringify({ v: 2, T: T, m: m });
+  }
+  // The newest cards win: the oldest go first when the key would pass its cap; teams no card uses are not stored.
+  function save(cards) {
+    var list = cards.slice();
+    var out = pack(list);
+    while (out.length > MAX_MATCHES && list.length > 1) { list.shift(); out = pack(list); }
+    if (out.length > MAX_MATCHES) throw new Error("too_long");
+    localStorage.setItem(KEY_MATCHES, out);
+    return { n: list.length, len: out.length };
+  }
+  function same(a, b) {
+    var wanted = {};
+    for (var i = 0; i < a.a.length; i++) wanted[a.a[i]] = true;
+    for (var j = 0; j < a.b.length; j++) wanted[a.b[j]] = true;
+    return overlap(b, wanted) >= MATCH_MIN && a.id === b.id;
+  }
+
+  // --- requests -----------------------------------------------------------------------------------------
+  function piece(base, value, start) {
+    var size = 2400;
+    for (;;) {
+      var message = {};
+      for (var k in base) message[k] = base[k];
+      message.n = value.length;
+      message.s = start;
+      message.v = value.slice(start, start + size);
+      if ((PREFIX + JSON.stringify(message)).length <= TITLE_MAX || size < 64) return message;
+      size = Math.floor(size * 0.75);
+    }
+  }
+
+  function handle() {
+    var request = null;
+    try {
+      request = JSON.parse(decodeURIComponent(location.hash.slice(1)));
+      if (!request || typeof request.i !== "string" || request.i.length > 80) return;
+      var id = request.i;
+      if (request.o === "hello") {
+        reply({ i: id, o: "ready", ok: true, v: VERSION, m: MAX_STATE, h: location.href });
+        return;
+      }
+      if (request.o === "r") {
+        var value = localStorage.getItem(KEY_STATE);
+        var fromV1 = 0;
+        if (value === null) {
+          var old = localStorage.getItem(KEY_V1); // v1's record, read only; the next save writes the v2 key
+          if (validRecord(old)) { value = old; fromV1 = 1; }
+        }
+        if (value === null) { reply({ i: id, o: "r", ok: true, x: 0 }); return; }
+        var start = request.s === undefined ? 0 : request.s;
+        if (typeof start !== "number" || start % 1 !== 0 || start < 0 || start > value.length) throw new Error("range");
+        reply(piece({ i: id, o: "r", ok: true, x: 1, f: fromV1 }, value, start));
+        return;
+      }
+      if (request.o === "w") {
+        if (!validRecord(request.v)) throw new Error("checksum");
+        localStorage.setItem(KEY_STATE, request.v);
+        reply({ i: id, o: "w", ok: true });
+        return;
+      }
+      if (request.o === "u") {
+        var card = cleanCard(request.c);
+        if (!card) throw new Error("card");
+        if (!card.at) card.at = Math.floor(new Date().getTime() / 1000);
+        // Read, merge and write in this one handler: two panels asking at once cannot lose each other.
+        var cards = load().filter(function (old) { return !same(card, old); });
+        cards.push(card);
+        var done = save(cards);
+        reply({ i: id, o: "u", ok: true, n: done.n, len: done.len });
+        return;
+      }
+      if (request.o === "q") {
+        var wanted = {};
+        var ids = Array.isArray(request.a) ? request.a : [];
+        if (ids.length > 12) throw new Error("ids");
+        for (var q = 0; q < ids.length; q++) { var n = account(ids[q]); if (n) wanted[n] = true; }
+        var want = typeof request.id === "string" && /^\d{1,12}$/.test(request.id) ? request.id : "";
+        var best = null, bestRank = -1;
+        var stored = load();
+        for (var s = 0; s < stored.length; s++) {
+          var c = stored[s];
+          var shared = overlap(c, wanted);
+          if (shared < MATCH_MIN) continue;
+          // A card written for exactly this match first, then one without a match id, then the closest, newest.
+          var rank = (want && c.id === want ? 3 : c.id ? 0 : 2) * 1e12 + shared * 1e10 + c.at;
+          if (c.id && c.id !== want) continue;
+          if (rank > bestRank) { best = c; bestRank = rank; }
+        }
+        reply(best ? { i: id, o: "q", ok: true, x: 1, c: best } : { i: id, o: "q", ok: true, x: 0 });
+        return;
+      }
+      throw new Error("invalid_request");
+    } catch (error) {
+      if (request && typeof request.i === "string")
+        reply({ i: request.i.slice(0, 80), o: String(request.o).slice(0, 12), ok: false, e: String(error && error.message ? error.message : error).slice(0, 160) });
+    }
+  }
+
+  window.addEventListener("hashchange", handle);
+  handle();
+})();
+</script>
