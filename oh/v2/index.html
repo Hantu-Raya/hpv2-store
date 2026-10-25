@@ -10,7 +10,10 @@
 //   <BASE>/matches  { v:2, T:[[name,tag,logo],...], m:[{a,b,t:[i,j],o,w,id,at},...] } at most 32768 chars
 // Replies are cut at 4096 chars by the game (HTMLTitle), so no reply may be longer than TITLE_MAX: the
 // state is read in pieces (r with s = offset) and one match card is asked for by its accounts (q).
-// Ops (request {i,o,...} in the URL fragment): hello, r, w, u, q.
+// Ops (request {i,o,...} in the URL fragment): hello, r, w, u, q, s.
+// s (suggest) is the learned registry: team -> its 12 most recent accounts, learned from the cards of ended
+// matches (a winner is set; a card with an empty team name teaches nothing). It only ever answers "this side
+// looks like <team>": at least 4 of the side's accounts are members of one team and at most 2 of another's.
 (function () {
   "use strict";
   var VERSION = 2;
@@ -156,6 +159,43 @@
     return overlap(b, wanted) >= MATCH_MIN && a.id === b.id;
   }
 
+  // --- the learned registry (suggestions only) ----------------------------------------------------------
+  var REGISTRY_MEMBERS = 12;
+  function registry(cards) {
+    var teams = {};
+    var ordered = cards.slice().sort(function (x, y) { return x.at - y.at; });
+    for (var i = 0; i < ordered.length; i++) {
+      var c = ordered[i];
+      if (!c.w) continue;
+      for (var side = 0; side < 2; side++) {
+        var t = c.t[side];
+        if (!t[0]) continue;
+        var key = t[0].toLowerCase();
+        var entry = teams[key] || (teams[key] = { t: t, members: [] });
+        var list = side === 0 ? c.a : c.b;
+        entry.t = t;
+        entry.members = list.concat(entry.members.filter(function (id) { return list.indexOf(id) < 0; })).slice(0, REGISTRY_MEMBERS);
+      }
+    }
+    return teams;
+  }
+  function suggest(teams, list) {
+    var best = null, bestN = 0, second = 0;
+    for (var key in teams) {
+      var n = 0;
+      for (var i = 0; i < list.length; i++) if (teams[key].members.indexOf(list[i]) >= 0) n++;
+      if (n > bestN) { second = bestN; bestN = n; best = teams[key]; }
+      else if (n > second) second = n;
+    }
+    return best && bestN >= 4 && second <= 2 ? { t: best.t, k: bestN } : 0;
+  }
+  function accounts(raw) {
+    var out = [];
+    if (!Array.isArray(raw) || raw.length > 12) throw new Error("ids");
+    for (var i = 0; i < raw.length; i++) { var n = account(raw[i]); if (n) out.push(n); }
+    return out;
+  }
+
   // --- requests -----------------------------------------------------------------------------------------
   function piece(base, value, start) {
     var size = 2400;
@@ -228,6 +268,11 @@
           if (rank > bestRank) { best = c; bestRank = rank; }
         }
         reply(best ? { i: id, o: "q", ok: true, x: 1, c: best } : { i: id, o: "q", ok: true, x: 0 });
+        return;
+      }
+      if (request.o === "s") {
+        var teams = registry(load());
+        reply({ i: id, o: "s", ok: true, s: [suggest(teams, accounts(request.a)), suggest(teams, accounts(request.b))] });
         return;
       }
       throw new Error("invalid_request");
