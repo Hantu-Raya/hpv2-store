@@ -7,7 +7,8 @@
 // in this origin's localStorage in Steam's CEF profile, not on a server. Keys (never the HP Colors, Buff
 // Timer, DLF or v1 keys; v1's state key is only read, once, to migrate):
 //   <BASE>/state    OHS1.<fnv1a32>.<{s:1,state}>, at most 8192 chars (the editor's whole setup)
-//   <BASE>/matches  { v:2, T:[[name,tag,logo],...], m:[{a,b,t:[i,j],o,w,id,at},...] } at most 32768 chars
+//   <BASE>/matches  { v:2, T:[[name,tag,logo],...], m:[{a,b,t:[i,j],o,w,id,at},...] } at most 32768 chars;
+//                   a card is deleted 2 days after its at (CARD_TTL), by the next request that reads the key
 // Replies are cut at 4096 chars by the game (HTMLTitle), so no reply may be longer than TITLE_MAX: the
 // state is read in pieces (r with s = offset) and one match card is asked for by its accounts (q).
 // Ops (request {i,o,...} in the URL fragment): hello, r, w, u, q, s.
@@ -28,6 +29,8 @@
   var TITLE_MAX = 4000;
   var MATCH_MIN = 10; // accounts a stored card must share with the asked roster
   var MAX_URL = 512;
+  var CARD_TTL = 2 * 86400; // seconds a card lives after its at (the owner's decision, 2026-10-26)
+  function nowSeconds() { return Math.floor(new Date().getTime() / 1000); }
 
   function checksum(text) {
     var hash = 0x811c9dc5;
@@ -111,22 +114,33 @@
   }
 
   // --- the matches key ----------------------------------------------------------------------------------
-  // Stored compactly: teams (and the organiser) are listed once in T and referenced by index.
+  // Stored compactly: teams (and the organiser) are listed once in T and referenced by index. Cards older
+  // than CARD_TTL are left out; prune() writes the key back without them.
   function load() {
     try {
       var data = JSON.parse(localStorage.getItem(KEY_MATCHES) || "null");
       if (data && data.v === 2 && Array.isArray(data.T) && Array.isArray(data.m)) {
         var cards = [];
+        var now = nowSeconds();
         for (var i = 0; i < data.m.length; i++) {
           var m = data.m[i];
           var t0 = data.T[m.t[0]], t1 = data.T[m.t[1]], org = m.o >= 0 ? data.T[m.o] : null;
           var card = cleanCard({ a: m.a, b: m.b, t: [t0, t1], r: org ? [org[0], org[2]] : 0, w: m.w, id: m.id || "", at: m.at });
-          if (card) cards.push(card);
+          if (card && now - card.at <= CARD_TTL) cards.push(card);
         }
+        cards.n = data.m.length;
         return cards;
       }
     } catch (error) { /* unreadable: start empty */ }
-    return [];
+    var empty = [];
+    empty.n = 0;
+    return empty;
+  }
+  // The cards as load() gives them; an expired (or unreadable) card is deleted from the key now.
+  function prune() {
+    var cards = load();
+    if (cards.n !== cards.length) save(cards);
+    return cards;
   }
   function pack(cards) {
     var T = [];
@@ -157,6 +171,12 @@
     for (var i = 0; i < a.a.length; i++) wanted[a.a[i]] = true;
     for (var j = 0; j < a.b.length; j++) wanted[a.b[j]] = true;
     return overlap(b, wanted) >= MATCH_MIN && a.id === b.id;
+  }
+  // A card for a match id replaces the id-less card of the same players written no later than it (the
+  // dashboard ties the HUD's card to the match it fits); a newer id-less card (their next map) stays.
+  function superseded(card, old) {
+    if (same(card, old)) return true;
+    return !!card.id && !old.id && old.at <= card.at && same(card, { a: old.a, b: old.b, id: card.id });
   }
 
   // --- the learned registry (suggestions only) ----------------------------------------------------------
@@ -242,10 +262,10 @@
       if (request.o === "u") {
         var card = cleanCard(request.c);
         if (!card) throw new Error("card");
-        if (!card.at) card.at = Math.floor(new Date().getTime() / 1000);
+        if (!card.at) card.at = nowSeconds();
         // Read, merge and write in this one handler: two panels asking at once cannot lose each other.
-        var cards = load().filter(function (old) { return !same(card, old); });
-        cards.push(card);
+        var cards = load().filter(function (old) { return !superseded(card, old); });
+        if (nowSeconds() - card.at <= CARD_TTL) cards.push(card); // an expired card is not stored
         var done = save(cards);
         reply({ i: id, o: "u", ok: true, n: done.n, len: done.len });
         return;
@@ -257,7 +277,7 @@
         for (var q = 0; q < ids.length; q++) { var n = account(ids[q]); if (n) wanted[n] = true; }
         var want = typeof request.id === "string" && /^\d{1,12}$/.test(request.id) ? request.id : "";
         var best = null, bestRank = -1;
-        var stored = load();
+        var stored = prune();
         for (var s = 0; s < stored.length; s++) {
           var c = stored[s];
           var shared = overlap(c, wanted);
@@ -271,7 +291,7 @@
         return;
       }
       if (request.o === "s") {
-        var teams = registry(load());
+        var teams = registry(prune());
         reply({ i: id, o: "s", ok: true, s: [suggest(teams, accounts(request.a)), suggest(teams, accounts(request.b))] });
         return;
       }
