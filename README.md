@@ -181,6 +181,5 @@ The page reports protocol version `1` (`VERSION` in `index.html`) and the `vkeys
 - `index.html`: the whole page. A single inline script handles the requests; it has no dependencies.
 - `latest.json`: newest released version per mod, read by the page (see Versioning).
 - `bt/index.html`, `dlf/index.html`: the Buff Timer and DLF broadcast pages, each with its own key and version.
-- `oh/index.html`: the Observer HUD page (one key, `hantu.observer_hud.v1/state`). `oh/v2-probe/index.html` is a temporary test page for a second Observer HUD key (match cards). It uses its own `hantu.observer_hud.v2probe/*` keys, never the v1 key, and will be removed after the test.
 
 The mod side is `hp_colors_rewrite_v2/panorama/scripts/hp_colors_v2_storage.js` in [Deadlock-mods-collection](https://github.com/Hantu-Raya/Deadlock-mods-collection). Its end-to-end tests (`scripts/validate-hp-colors-rewrite-v2-storage.test.js`) run this page's script against a simulated game panel.
