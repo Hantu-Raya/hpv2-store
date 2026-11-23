@@ -86,6 +86,7 @@ The mod-side end-to-end test is `dlf/scripts/validate-dlf.js`; it runs this page
 - Replies start with `DPS1:` and the page has its own `VERSION` (1).
 - It stores one key, `hantu.detailed_postgame.v1/prefs`, `{"v":1,"rows":[seven stat keys],"clicked":true}` of at most 512 characters (a key is 2-8 lower-case letters or `""` for an empty row, no key twice). The page checks only `v` and `rows`; the mod writes `clicked` (a row name was clicked, so the board hides its "click a row name" hint). Requests are `hello`, `r` and `w` (field `c` = the record); there is no chunking, backup key or delete.
 - It never reads, writes or deletes another page's keys.
+- Op `it` (match id `m`, hero id `h`) gives one player's item purchases for the board's buy times: the page fetches deadlock-api's public match metadata (`https://api.deadlock-api.com/v1/matches/<m>/metadata`, once per page load; the only request it sends anywhere) and replies `v = [[item class name, bought s, sold s (0: kept)], ...]`, or `x = 0` when deadlock-api does not have the match. Nothing from it is stored. deadlock-api item ids are MurmurHash2 (seed 0x31415926) of the class name; the page carries the class names (`ITEM_NAMES`, written by `detailed_postgame/scripts/gen-item-names.js` in Deadlock-mods-collection from the game's localization; run it again when a patch adds items).
 
 The mod-side end-to-end tests are `detailed_postgame/scripts/validate-detailed-postgame.js` and `observer_hud/scripts/validate-observer-hud.js`; they run this page's script against a simulated game panel.
 
