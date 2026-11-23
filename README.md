@@ -84,7 +84,7 @@ The mod-side end-to-end test is `dlf/scripts/validate-dlf.js`; it runs this page
 `dps/v1/index.html` (<https://hantu-raya.github.io/hpv2-store/dps/v1/>) saves the row layout of the post-game stats board: which stat each of its seven rows shows. The board is the same in Detailed Post Scoreboard Menu (pak11, `detailed_postgame/` in Deadlock-mods-collection) and Observer HUD (pak10, `observer_hud/`), so both read and write this one record. It follows the Buff Timer page's rules:
 
 - Replies start with `DPS1:` and the page has its own `VERSION` (1).
-- It stores one key, `hantu.detailed_postgame.v1/prefs`, `{"v":1,"rows":[seven stat keys]}` of at most 512 characters (a key is 2-8 lower-case letters or `""` for an empty row, no key twice). Requests are `hello`, `r` and `w` (field `c` = the record); there is no chunking, backup key or delete.
+- It stores one key, `hantu.detailed_postgame.v1/prefs`, `{"v":1,"rows":[seven stat keys],"clicked":true}` of at most 512 characters (a key is 2-8 lower-case letters or `""` for an empty row, no key twice). The page checks only `v` and `rows`; the mod writes `clicked` (a row name was clicked, so the board hides its "click a row name" hint). Requests are `hello`, `r` and `w` (field `c` = the record); there is no chunking, backup key or delete.
 - It never reads, writes or deletes another page's keys.
 
 The mod-side end-to-end tests are `detailed_postgame/scripts/validate-detailed-postgame.js` and `observer_hud/scripts/validate-observer-hud.js`; they run this page's script against a simulated game panel.
