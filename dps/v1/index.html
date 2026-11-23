@@ -1,0 +1,70 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Detailed Postgame local storage v1</title>
+<script>
+// Detailed Post Scoreboard Menu (pak11) and Observer HUD's post-game board (pak10): the board's own row layout.
+// Same fragment-in / title-out transport as ../../ (HP Colors) and ../../oh/v2/, its own prefix and key. The data
+// stays in this origin's localStorage in Steam's CEF profile, not on a server. Key (never another mod's):
+//   hantu.detailed_postgame.v1/prefs   {"v":1,"rows":[seven stat keys, "" for an empty row]}, at most 512 chars
+// Ops (request {i,o,...} in the URL fragment): hello, r (read), w (write, c = the record as text).
+(function () {
+  "use strict";
+  var VERSION = 1;
+  var PREFIX = "DPS1:";
+  var KEY = "hantu.detailed_postgame.v1/prefs";
+  var MAX_RECORD = 512;
+  var ROWS = 7;
+  var STAT_KEY = /^[a-z]{2,8}$/;
+
+  function reply(message) {
+    document.title = PREFIX + JSON.stringify(message);
+  }
+
+  // {"v":1,"rows":[...]}: seven keys, each a short lower-case name or "", no key twice.
+  function validRecord(text) {
+    if (typeof text !== "string" || text.length > MAX_RECORD) return false;
+    var record = null;
+    try { record = JSON.parse(text); } catch (error) { return false; }
+    if (!record || record.v !== 1 || !Array.isArray(record.rows) || record.rows.length !== ROWS) return false;
+    var seen = {};
+    for (var i = 0; i < ROWS; i++) {
+      var key = record.rows[i];
+      if (key === "") continue;
+      if (typeof key !== "string" || !STAT_KEY.test(key) || seen[key]) return false;
+      seen[key] = true;
+    }
+    return true;
+  }
+
+  function handle() {
+    var request = null;
+    try {
+      request = JSON.parse(decodeURIComponent(location.hash.slice(1)));
+      if (!request || typeof request.i !== "string" || request.i.length > 80) return;
+      var id = request.i;
+      if (request.o === "hello") {
+        reply({ i: id, o: "ready", ok: true, v: VERSION, m: MAX_RECORD, h: location.href });
+        return;
+      }
+      if (request.o === "r") {
+        var value = localStorage.getItem(KEY);
+        reply(validRecord(value) ? { i: id, o: "r", ok: true, x: 1, v: value } : { i: id, o: "r", ok: true, x: 0 });
+        return;
+      }
+      if (request.o === "w") {
+        if (!validRecord(request.c)) throw new Error("invalid_record");
+        localStorage.setItem(KEY, request.c);
+        reply({ i: id, o: "w", ok: true });
+        return;
+      }
+      throw new Error("invalid_request");
+    } catch (error) {
+      if (request && typeof request.i === "string")
+        reply({ i: request.i.slice(0, 80), o: String(request.o).slice(0, 12), ok: false, e: String(error && error.message ? error.message : error).slice(0, 160) });
+    }
+  }
+
+  window.addEventListener("hashchange", handle);
+  handle();
+})();
+</script>

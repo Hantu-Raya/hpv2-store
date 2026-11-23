@@ -79,6 +79,16 @@ The mod-side end-to-end test is `buff_timer_virgin/scripts/validate-settings-sto
 
 The mod-side end-to-end test is `dlf/scripts/validate-dlf.js`; it runs this page's script against a simulated game panel.
 
+### Detailed Postgame page (`/dps/v1/`)
+
+`dps/v1/index.html` (<https://hantu-raya.github.io/hpv2-store/dps/v1/>) saves the row layout of the post-game stats board: which stat each of its seven rows shows. The board is the same in Detailed Post Scoreboard Menu (pak11, `detailed_postgame/` in Deadlock-mods-collection) and Observer HUD (pak10, `observer_hud/`), so both read and write this one record. It follows the Buff Timer page's rules:
+
+- Replies start with `DPS1:` and the page has its own `VERSION` (1).
+- It stores one key, `hantu.detailed_postgame.v1/prefs`, `{"v":1,"rows":[seven stat keys]}` of at most 512 characters (a key is 2-8 lower-case letters or `""` for an empty row, no key twice). Requests are `hello`, `r` and `w` (field `c` = the record); there is no chunking, backup key or delete.
+- It never reads, writes or deletes another page's keys.
+
+The mod-side end-to-end tests are `detailed_postgame/scripts/validate-detailed-postgame.js` and `observer_hud/scripts/validate-observer-hud.js`; they run this page's script against a simulated game panel.
+
 ## The fix in the mod
 
 From `hp_colors_rewrite_v2/panorama/scripts/hp_colors_v2_storage.js`. Lines marked `// …` are trimmed.
@@ -180,6 +190,6 @@ The page reports protocol version `1` (`VERSION` in `index.html`) and the `vkeys
 
 - `index.html`: the whole page. A single inline script handles the requests; it has no dependencies.
 - `latest.json`: newest released version per mod, read by the page (see Versioning).
-- `bt/index.html`, `dlf/index.html`: the Buff Timer and DLF broadcast pages, each with its own key and version.
+- `bt/index.html`, `dlf/index.html`, `dps/v1/index.html`: the Buff Timer, DLF broadcast and Detailed Postgame pages, each with its own key and version.
 
 The mod side is `hp_colors_rewrite_v2/panorama/scripts/hp_colors_v2_storage.js` in [Deadlock-mods-collection](https://github.com/Hantu-Raya/Deadlock-mods-collection). Its end-to-end tests (`scripts/validate-hp-colors-rewrite-v2-storage.test.js`) run this page's script against a simulated game panel.
